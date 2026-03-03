@@ -4,116 +4,68 @@ const axios = require('axios');
 
 const app = express();
 
-// Allow your Goorac frontend to communicate with this server
+// Allow your Goorac frontend to communicate with this server without CORS errors
 app.use(cors());
 
-// Fake a real browser
-const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-};
-
+// 1. HOME PAGE ROUTE (To test if the server is awake)
 app.get('/', (req, res) => {
     res.send('🚀 Goorac Quantum API is LIVE! Test it here: <a href="/api/feed?topic=dhoni">/api/feed?topic=dhoni</a>');
 });
 
-// THE UPGRADED MAIN FEED ROUTE
+// 2. THE MAIN FEED ROUTE
 app.get('/api/feed', async (req, res) => {
     const topic = req.query.topic || "technology";
     let combinedFeed = [];
 
-    // --- 1. SCRAPE REDDIT (High Volume & Randomized) ---
+    // --- 1. SCRAPE REDDIT (Bypassing blocks using RSS Bridge) ---
     try {
-        // Randomize the sort method so you don't see the same posts twice
-        const sortMethods = ['hot', 'new', 'relevance'];
-        const randomSort = sortMethods[Math.floor(Math.random() * sortMethods.length)];
+        // Instead of .json, we use Reddit's RSS feed and pass it through the RSS2JSON proxy
+        const redditRssUrl = `https://www.reddit.com/search.rss?q=${encodeURIComponent(topic)}&sort=hot`;
+        const redditApiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(redditRssUrl)}`;
         
-        // Ask for 50 items instead of 10 to ensure we get plenty of media
-        const redditUrl = `https://www.reddit.com/search.json?q=${encodeURIComponent(topic)}&sort=${randomSort}&limit=50`;
-        const redditRes = await axios.get(redditUrl, { headers });
+        const redditRes = await axios.get(redditApiUrl);
         
-        let redditPosts = redditRes.data.data.children
-            .map(c => c.data)
-            .filter(post => {
-                // Must not be 18+
-                if (post.over_18) return false;
-                
-                // Smarter Image Detection: Checks post hints, previews, and thumbnails
-                const hasImageHint = post.post_hint === 'image';
-                const hasImageExt = post.url && post.url.match(/\.(jpeg|jpg|gif|png)$/i);
-                const hasThumbnail = post.thumbnail && post.thumbnail.startsWith('http');
-                
-                return hasImageHint || hasImageExt || hasThumbnail;
-            })
-            .map(post => {
-                // Find the highest quality image available
-                let highResImg = post.url;
-                if (post.preview && post.preview.images && post.preview.images[0].source.url) {
-                    highResImg = post.preview.images[0].source.url.replace(/&amp;/g, '&');
-                } else if (!highResImg.match(/\.(jpeg|jpg|gif|png)$/i) && post.thumbnail.startsWith('http')) {
-                    highResImg = post.thumbnail;
+        if (redditRes.data.status === "ok") {
+            let redditPosts = redditRes.data.items.map(item => {
+                // Reddit RSS hides images inside the HTML content. We extract it here:
+                let imgUrl = "";
+                const imgMatch = item.content.match(/<img[^>]+src="([^">]+)"/);
+                if (imgMatch) {
+                    imgUrl = imgMatch[1];
                 }
 
                 return {
-                    id: `reddit_${post.id}_${Math.random().toString(36).substr(2, 5)}`,
+                    id: `reddit_${Math.random().toString(36).substring(2, 9)}`,
                     category: topic,
-                    source: `r/${post.subreddit}`,
-                    author: post.author,
-                    title: post.title,
-                    imgUrl: highResImg,
-                    likes: post.ups,
-                    link: `https://reddit.com${post.permalink}`,
+                    source: "Reddit",
+                    author: item.author || "User",
+                    title: item.title,
+                    imgUrl: imgUrl,
+                    likes: Math.floor(Math.random() * 900) + 150, // Simulated likes for UI consistency
+                    link: item.link,
                     type: 'reddit'
                 };
-            });
+            }).filter(post => post.imgUrl); // STRICT FILTER: Drop any text-only posts
             
-        // Shuffle the extracted Reddit posts and take 15 random ones
-        redditPosts = redditPosts.sort(() => Math.random() - 0.5).slice(0, 15);
-        combinedFeed.push(...redditPosts);
-
+            // Shuffle and pick up to 15 random Reddit posts
+            redditPosts = redditPosts.sort(() => Math.random() - 0.5).slice(0, 15);
+            combinedFeed.push(...redditPosts);
+        }
     } catch (error) {
         console.error("Reddit fetch failed:", error.message);
     }
 
-    // --- 2. SCRAPE WIKIPEDIA (Randomized) ---
+    // --- 2. SCRAPE GOOGLE NEWS (Highly Reliable) ---
+    // (Wikipedia has been completely removed)
     try {
-        // Fetch 20 Wiki pages instead of 5, so we can randomly pick from a larger pool
-        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages|extracts&exintro&explaintext&generator=search&gsrsearch=${encodeURIComponent(topic)}&gsrlimit=20&pithumbsize=800`;
-        const wikiRes = await axios.get(wikiUrl, { headers });
+        const newsRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=en-IN&gl=IN&ceid=IN:en`;
+        const newsApiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(newsRssUrl)}`;
         
-        if (wikiRes.data.query && wikiRes.data.query.pages) {
-            const pages = Object.values(wikiRes.data.query.pages);
-            let wikiPosts = pages
-                .filter(page => page.thumbnail) // Keep only articles with images
-                .map(page => ({
-                    id: `wiki_${page.pageid}_${Math.random().toString(36).substr(2, 5)}`,
-                    category: topic,
-                    source: "Wikipedia",
-                    author: "Encyclopedia",
-                    title: page.title,
-                    imgUrl: page.thumbnail.source,
-                    likes: Math.floor(Math.random() * 500) + 100, 
-                    link: `https://en.wikipedia.org/?curid=${page.pageid}`,
-                    type: 'wikipedia'
-                }));
-            
-            // Shuffle Wikipedia results and pick 5 random ones
-            wikiPosts = wikiPosts.sort(() => Math.random() - 0.5).slice(0, 5);
-            combinedFeed.push(...wikiPosts);
-        }
-    } catch (error) {
-        console.error("Wikipedia fetch failed:", error.message);
-    }
-
-    // --- 3. SCRAPE GOOGLE NEWS (For guaranteed extra content) ---
-    try {
-        const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=en-IN&gl=IN&ceid=IN:en`;
-        const rss2jsonUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`;
-        
-        const newsRes = await axios.get(rss2jsonUrl);
+        const newsRes = await axios.get(newsApiUrl);
         
         if (newsRes.data.status === "ok") {
             let newsPosts = newsRes.data.items
-                .filter(item => item.enclosure && item.enclosure.link) // Must have image
+                .filter(item => item.enclosure && item.enclosure.link) // Only keep articles with images
                 .map(item => ({
                     id: `news_${Math.random().toString(36).substring(2, 9)}`,
                     category: topic,
@@ -126,17 +78,18 @@ app.get('/api/feed', async (req, res) => {
                     type: 'news'
                 }));
                 
-            newsPosts = newsPosts.sort(() => Math.random() - 0.5).slice(0, 10);
+            // Shuffle and pick up to 15 random News posts
+            newsPosts = newsPosts.sort(() => Math.random() - 0.5).slice(0, 15);
             combinedFeed.push(...newsPosts);
         }
     } catch (error) {
         console.error("News fetch failed:", error.message);
     }
 
-    // Shuffle the final combined feed so Reddit, Wiki, and News are all mixed together
+    // Mix Reddit and Google News together randomly for a dynamic feed
     combinedFeed.sort(() => Math.random() - 0.5);
 
-    // Send the massive, randomized data back to the Goorac app
+    // Send the data back to the Goorac frontend
     res.json({ success: true, bites: combinedFeed });
 });
 
