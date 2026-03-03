@@ -12,29 +12,35 @@ app.get('/', (req, res) => {
     res.send('🚀 Goorac Quantum API is LIVE! Test it here: <a href="/api/feed?topic=dhoni">/api/feed?topic=dhoni</a>');
 });
 
-// 2. THE MAIN FEED ROUTE (Invidious Network + News Fallback)
+// 2. THE MAIN FEED ROUTE (High-Volume Invidious Network)
 app.get('/api/feed', async (req, res) => {
     const topic = req.query.topic || "technology";
     let combinedFeed = [];
     let debugMessage = "Fetching videos...";
 
-    // --- SOURCE 1: INVIDIOUS YOUTUBE NETWORK ---
-    // We use a list of 3 public servers. If one is busy, it instantly tries the next!
+    // We added more reliable servers to the list
     const instances = [
         "https://vid.puffyan.us",
         "https://invidious.fdn.fr",
-        "https://invidious.perennialte.ch"
+        "https://invidious.perennialte.ch",
+        "https://yt.artemislena.eu" 
     ];
 
     for (let instance of instances) {
         try {
-            // Ask the public server for YouTube Shorts data
-            const searchUrl = `${instance}/api/v1/search?q=${encodeURIComponent(topic + " shorts")}&type=video`;
-            const response = await axios.get(searchUrl, { timeout: 6000 }); // 6 second timeout
+            // THE FIX: Fetch Page 1 and Page 2 at the exact same time for double the data!
+            const [page1, page2] = await Promise.all([
+                axios.get(`${instance}/api/v1/search?q=${encodeURIComponent(topic + " shorts")}&type=video&page=1`, { timeout: 7000 }).catch(() => null),
+                axios.get(`${instance}/api/v1/search?q=${encodeURIComponent(topic + " shorts")}&type=video&page=2`, { timeout: 7000 }).catch(() => null)
+            ]);
+
+            let allVideos = [];
+            if (page1 && page1.data) allVideos.push(...page1.data);
+            if (page2 && page2.data) allVideos.push(...page2.data);
             
-            if (response.data && response.data.length > 0) {
-                // Filter for vertical shorts (Under 3 minutes)
-                const shorts = response.data.filter(vid => vid.lengthSeconds < 180).slice(0, 15);
+            if (allVideos.length > 0) {
+                // Keep videos under 4 minutes (240 seconds). Removed the .slice() limit!
+                const shorts = allVideos.filter(vid => vid.lengthSeconds < 240);
                 
                 combinedFeed = shorts.map(video => ({
                     id: `yt_${video.videoId}_${Math.random().toString(36).substring(2, 7)}`,
@@ -42,15 +48,15 @@ app.get('/api/feed', async (req, res) => {
                     source: "YouTube Shorts",
                     author: video.author,
                     title: video.title,
-                    imgUrl: video.videoThumbnails ? video.videoThumbnails[0].url : `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
-                    videoId: video.videoId, // Required to play the video in your app!
+                    imgUrl: video.videoThumbnails && video.videoThumbnails.length > 0 ? video.videoThumbnails[0].url : `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+                    videoId: video.videoId, 
                     likes: video.viewCount || Math.floor(Math.random() * 5000), 
                     link: `https://youtube.com/watch?v=${video.videoId}`,
                     type: 'video'
                 }));
                 
-                debugMessage = `Success using ${instance}`;
-                break; // We got the data! Exit the loop.
+                debugMessage = `Success using ${instance}. Loaded ${combinedFeed.length} videos.`;
+                break; // We got a massive list of data! Exit the loop.
             }
         } catch (err) {
             console.log(`Instance ${instance} failed. Trying next...`);
@@ -59,7 +65,6 @@ app.get('/api/feed', async (req, res) => {
     }
 
     // --- SOURCE 2: THE FAILSAFE (Google News) ---
-    // If YouTube blocks all the public servers, we fall back to the News feed so the app NEVER breaks.
     if (combinedFeed.length === 0) {
         try {
             const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(topic + " video")}&hl=en-IN&gl=IN&ceid=IN:en`;
@@ -88,7 +93,7 @@ app.get('/api/feed', async (req, res) => {
         }
     }
 
-    // Shuffle the feed so it feels organic
+    // Shuffle the huge feed so it feels completely random
     combinedFeed.sort(() => Math.random() - 0.5);
 
     // Send the data back to the Goorac frontend
