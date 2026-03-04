@@ -1,7 +1,7 @@
 {
-  "name": "goorac-fast-vision-proxy",
-  "version": "3.0.0",
-  "description": "Stateless 3x3 Fast Fetch Search Engine",
+  "name": "goorac-fast-proxy",
+  "version": "4.0.0",
+  "description": "Stateless YouTube Proxy for Vision & Bites",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
